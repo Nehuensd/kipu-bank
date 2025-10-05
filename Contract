@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
+
+contract Mycontrato{ //Inicio de contrato
+event paid(address indexed payer, uint256 amount); //Evento de pago, guardo la dirección y el monto
+event Withdraw(address indexed user, uint256 amount); //Evento de retiro, guardo al usuario y el monto
+
+mapping(address=>uint256) public balances; //Asocio la dirección
+uint256 public immutable maxWithdraw=2 ether; //Declaración limite de extracción
+uint256 public immutable bankCap=10 ether; //Limite global
+uint256 public totalDeposits;
+uint256 public counterdep;
+uint256 public counterext;
+
+
+function deposit() external payable { //1.Inicio de función pago
+    if(msg.value == 1 ether){
+        balances[msg.sender] += msg.value; //Sumo el balance
+        totalDeposits+=msg.value;
+        counterdep++;
+        emit paid(msg.sender, msg.value); //Emito el evento de pago
+    }
+    else{
+        revert("Revisar, pago cancelado"); //Rechazo el pago si no es el acordado
+    }
+}
+function myBalance() external view returns (uint256){//Revisar balance
+    return balances[msg.sender]; //Retorno el balance de la persona
+}
+
+function withdraw(uint256 amount) external{ //2.Iniciod e funcion extraer
+ 
+ if(amount!=0){ //Condicional para retirar)
+  if(amount <= balances[msg.sender]){
+    if(amount <= maxWithdraw){
+        balances[msg.sender]-=amount; //Retiro
+        (bool success,)= msg.sender.call{value:amount}("");
+        totalDeposits-=amount;
+        counterext++;
+        require(success, "Fallo al enviar ETH");
+        emit Withdraw(msg.sender,amount); //Retiro de fondos (evento)
+    }
+    else{
+     revert("Excede el umbral por transaccion");
+    }
+  }
+  else{
+    revert("Fondos insuficientes");
+  }
+}
+else{
+    revert("Monto insufuciente");
+}
+}
+}
