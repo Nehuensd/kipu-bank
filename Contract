@@ -1,55 +1,144 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
 
-contract Mycontrato{ //Inicio de contrato
-event paid(address indexed payer, uint256 amount); //Evento de pago, guardo la dirección y el monto
-event Withdraw(address indexed user, uint256 amount); //Evento de retiro, guardo al usuario y el monto
+pragma solidity ^0.8.0;
 
-mapping(address=>uint256) public balances; //Asocio la dirección
-uint256 public immutable maxWithdraw=2 ether; //Declaración limite de extracción
-uint256 public immutable bankCap=10 ether; //Limite global
-uint256 public totalDeposits;
-uint256 public counterdep;
-uint256 public counterext;
+//Title Kipubank
+//@author Nehuen
+//@notice Simple banking for ETH deposits with personal vaults, global limit and immutable withdrawal limit.
+//@dev checks-effects-interactions, use of modifiers and secure native transfers
+contract KipuBank{
 
+//@notice Error notice when 0 is sent as quantity
+error kipuZeroAmount();
 
-function deposit() external payable { //1.Inicio de función pago
-    if(msg.value == 1 ether){
-        balances[msg.sender] += msg.value; //Sumo el balance
-        totalDeposits+=msg.value;
-        counterdep++;
-        emit paid(msg.sender, msg.value); //Emito el evento de pago
-    }
-    else{
-        revert("Revisar, pago cancelado"); //Rechazo el pago si no es el acordado
-    }
+//@notice Error notice when deposit global is full
+//@param attempedAmount excess amount
+//@param availableRemaining remaining amount allowed before reaching bankCap
+error kipuBankCapExceeded(uint256 attempedAmount, uint256 availableRemaining);
+
+//@notice Error when the amount requested to withdraw exceedes the withdrawal limit
+//@param requested Requested quantity
+//@param limit Limit for requested
+error kipuWithdrawalLimitExceeded(uint256 requested, uint256 limit);
+
+//@notice Error user does not have enough balance in his vault
+//@param requested Requested quantity
+//@param balance Balance in his vault
+error kipuInsufficentBalance(uint256 requested, uint256 balance);
+
+//@notice Error Native transfer by call falls
+//@param to Address to which attempted to send
+//@param amount Quantity can´t send
+error kipuNativeTransferFailed(address to, uint256 amount);
+
+//@notice Limit global max of ETH that the contract accepts as a deposit
+uint256 public immutable bankCap;
+
+//@notice Maximum withdrawal limit in a single transaction
+uint256 public immutable withdrawalLimit;
+
+//@notice Total accumulated balance stored in the contract
+uint256 public totalBanked;
+//@notice Balance per user: address=>balance in wei
+mapping(address=>uint256) private _balances;
+//@notice Total successful deposit counter
+uint256 public depositCount;
+//@notice Total succesful withdrawal counter
+uint256 public withrawalCount;
+
+//@notice Event issued after a successful deposit
+//@param user Deposit address
+//@param amount Deposit quantity
+//@param newBalance New quantity in the personal vault 
+//@param depositId Incremental deposit identifier
+event Deposit(address indexed user, uint256 amount, uint256 newBalance, uint256 depositId);
+//@notice Event issued after a successful withdrawal
+//@param user Withdrawal address
+//@param amount Withdrawal quantity
+//@param newBalance New quantity in the personal vault
+//@param withdrawalId Incremental withdrawal idenitifier
+event withdrawal(address indexed user, uint256 amount, uint256 newBalance, uint256 withdrawalId);
+//@notice Modifier quantity greater than cero
+//@param amount Quantity
+modifier nonZero(uint256 amount){
+    if(amount==0) revert kipuZeroAmount();
+    _;
 }
-function myBalance() external view returns (uint256){//Revisar balance
-    return balances[msg.sender]; //Retorno el balance de la persona
+//@notice Modifier check that the deposit does not break the banKCap
+//@param amount Quiantity
+modifier withinBankCap(uint256 amount){
+    uint256 remaining = bankCap - totalBanked;
+    if(amount>remaining) revert kipuBankCapExceeded(amount,remaining);
+    _;
 }
 
-function withdraw(uint256 amount) external{ //2.Iniciod e funcion extraer
- 
- if(amount!=0){ //Condicional para retirar)
-  if(amount <= balances[msg.sender]){
-    if(amount <= maxWithdraw){
-        balances[msg.sender]-=amount; //Retiro
-        (bool success,)= msg.sender.call{value:amount}("");
-        totalDeposits-=amount;
-        counterext++;
-        require(success, "Fallo al enviar ETH");
-        emit Withdraw(msg.sender,amount); //Retiro de fondos (evento)
-    }
-    else{
-     revert("Excede el umbral por transaccion");
-    }
-  }
-  else{
-    revert("Fondos insuficientes");
-  }
+//@pragma _bankCap Total global limit acceptable to the bank
+//@pragma _withrawalLimit Withdrawal limit per transaction
+constructor(uint256 _bankCap, uint256 _withdrawalLimit){
+    bankCap=_bankCap;
+    withdrawalLimit=_withdrawalLimit;
+    totalBanked=0;
+    depositCount=0;
+    withrawalCount=0;
 }
-else{
-    revert("Monto insufuciente");
+
+//@notice Deposit ETH in the vault
+//@dev Checks-effects-interactions: validates cap, updates status, issues event.
+//@dev Using modifier withinBankCap to validate global limit
+//@return newBalance New user balance after deposit
+function deposit() external payable nonZero(msg.value) withinBankCap(msg.value) returns (uint256 newBalance){
+    //Effects(updates states)
+    _balances[msg.sender] += msg.value;
+    //increment counter deposits and emit event
+    depositCount+=1;
+    newBalance=_balances[msg.sender];
+    emit Deposit(msg.sender,msg.value,newBalance,depositCount);
+    return newBalance;
 }
+//@notice Withdraws ETH from the sender vault up to the withdrawal limit
+//@dev Check requested>0, that requested <=withdrawalLimit and that the user has sufficient balanced
+//@param requested Withdrawal quantity
+//@return sent True if the transfer was successful
+function  withdraw (uint256 requested) external nonZero(requested) returns(bool sent){
+//Checks withdrawal limit
+if(requested>withdrawalLimit) revert kipuWithdrawalLimitExceeded(requested,withdrawalLimit);
+uint256 userBalance = _balances[msg.sender];
+if(requested>userBalance) revert kipuInsufficentBalance(requested,userBalance);
+_balances[msg.sender]=userBalance-requested;
+totalBanked-=requested;
+
+withrawalCount+=1;
+uint256 newBalance=_balances[msg.sender];
+
+sent=_sendNative(payable(msg.sender),requested);
+if(!sent)revert kipuNativeTransferFailed(msg.sender,requested);
+emit withdrawal(msg.sender, requested, newBalance, withrawalCount);
+return true;
 }
+
+//@notice Balance of the vault of an address
+//@param account Address whose vault is consulted
+//@return balance Balance in wei
+function getBalance(address account) external view returns (uint256 balance){
+    return _balances[account];
+}
+
+//@dev Private funcion that centralizes the native shipping logic
+//@param to Destine adress payable
+//@param amount Quantity in wei to send
+//@returns sucess True if the transfer was successful
+function _sendNative(address payable to, uint256 amount) private returns (bool success){
+    (success,)=to.call{value:amount}("");
+    return success;
+}
+
+//@notice Receive fallback to avoid accidental shipments without calling deposit
+//@dev Reject direct ETH shipments. We ask that deposit() be called explicitly.
+receive() external payable{
+    revert kipuZeroAmount();
+}
+//@notice Fallback who rejects calls without data
+fallback() external payable {
+    revert kipuZeroAmount();
+ }
 }
