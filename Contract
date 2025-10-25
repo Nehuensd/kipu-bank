@@ -14,7 +14,7 @@ error kipuZeroAmount();
 //@notice Error notice when deposit global is full
 //@param attempedAmount excess amount
 //@param availableRemaining remaining amount allowed before reaching bankCap
-error kipuBankCapExceeded(uint256 attempedAmount, uint256 availableRemaining);
+error kipuBankCapExceeded (uint256 attempedAmount, uint256 availableRemaining);
 
 //@notice Error when the amount requested to withdraw exceedes the withdrawal limit
 //@param requested Requested quantity
@@ -74,12 +74,20 @@ modifier withinBankCap(uint256 amount){
 
 //@pragma _bankCap Total global limit acceptable to the bank
 //@pragma _withrawalLimit Withdrawal limit per transaction
-constructor(uint256 _bankCap, uint256 _withdrawalLimit){
+constructor(uint256 _bankCap, uint256 _withdrawalLimit)payable{
     bankCap=_bankCap;
     withdrawalLimit=_withdrawalLimit;
     totalBanked=0;
     depositCount=0;
     withrawalCount=0;
+
+     if(msg.value>0){
+        if(msg.value >bankCap) revert kipuBankCapExceeded(msg.value,bankCap);
+        _balances[msg.sender]=msg.value;
+        totalBanked=msg.value;
+        depositCount=1;
+        emit Deposit(msg.sender,msg.value,_balances[msg.sender],depositCount);
+     }
 }
 
 //@notice Deposit ETH in the vault
@@ -89,6 +97,7 @@ constructor(uint256 _bankCap, uint256 _withdrawalLimit){
 function deposit() external payable nonZero(msg.value) withinBankCap(msg.value) returns (uint256 newBalance){
     //Effects(updates states)
     _balances[msg.sender] += msg.value;
+    totalBanked+=msg.value;
     //increment counter deposits and emit event
     depositCount+=1;
     newBalance=_balances[msg.sender];
